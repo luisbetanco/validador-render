@@ -1,99 +1,114 @@
 from flask import Flask, request, jsonify
 import tempfile
-import subprocess
 import os
 import re
-import sys # Importamos sys para forzar la escritura de logs
+import sys
+import traceback
+
+# --- Importamos las funciones y clases necesarias de pyHanko ---
+from pyhanko.pdf_utils.reader import PdfFileReader
+from pyhanko.sign.validation import validate_pdf_ltv_signature
+from pyhanko_certvalidator import ValidationContext
+from pyhanko_certvalidator.path import ValidationPath # Usaremos esto para verificar
 
 app = Flask(__name__)
 
-# Ya no necesitamos la configuración de logging a archivo.
-
 TRUST_PATH = "/app/cr-root-bundle.pem"
 
-# Tu función parse_pyhanko_output se queda igual.
-def parse_pyhanko_output(output):
-    firmas = []
-    warnings = []
-    current_firma = None
-    for line in output.splitlines():
-        line = line.strip()
-        field_match = re.match(r"Field \d+: (.+)", line)
-        if field_match:
-            if current_firma:
-                firmas.append(current_firma)
-            current_firma = {"campo_firma": field_match.group(1), "firma_valida": None, "datos": {}}
-            continue
-        if not current_firma:
-            if line: warnings.append(line)
-            continue
-        if "The signature is judged VALID" in line: current_firma["firma_valida"] = True
-        elif "The signature is judged INVALID" in line: current_firma["firma_valida"] = False
-        elif line.startswith("Certificate subject:"):
-            m_name = re.search(r"Common Name: ([^,]+)", line)
-            m_id = re.search(r"Serial Number: ([^,]+)", line)
-            if m_name: current_firma["datos"]["nombre"] = m_name.group(1)
-            if m_id: current_firma["datos"]["cedula"] = m_id.group(1)
-        elif line.startswith("Signing time as reported by signer:"):
-            current_firma["datos"]["fecha_firma"] = line.split(": ", 1)[1]
-    if current_firma: firmas.append(current_firma)
-    return {"firmas": firmas, "warnings": warnings, "ok": len(firmas) > 0}
+def procesar_con_libreria(ruta_pdf):
+    """
+    Valida un PDF usando pyHanko como una librería interna, con manejo de errores robusto.
+    """
+    print(f"Iniciando validación de librería para: {ruta_pdf}")
+    sys.stdout.flush()
+    try:
+        with open(TRUST_PATH, 'rb') as f:
+            trust_roots_pem = f.read()
+        
+        validation_context = ValidationContext(
+            trust_roots=[trust_roots_pem],
+            allow_fetching=True,
+            revocation_mode='soft-fail' # Usamos soft-fail para máxima compatibilidad
+        )
+
+        firmas_encontradas = []
+        with open(ruta_pdf, 'rb') as doc_file:
+            r = PdfFileReader(doc_file)
+            
+            if not r.embedded_signatures:
+                 print("No se encontraron firmas en el documento.")
+                 sys.stdout.flush()
+                 return {"firmas": [], "ok": False}
+
+            for i, sig in enumerate(r.embedded_signatures):
+                print(f"Analizando firma #{i+1}...")
+                sys.stdout.flush()
+                status = validate_pdf_ltv_signature(sig, validation_context)
+
+                # --- LÓGICA "A PRUEBA DE BALAS" ---
+                nombre = "No disponible"
+                cedula = "No disponible"
+                razon_invalidez = status.summary
+
+                # Verificamos si la validación produjo una ruta de certificación válida.
+                # Esta es la forma correcta de saber si el certificado fue procesado.
+                if status.path and isinstance(status.path, ValidationPath):
+                    cert = status.path.leaf_cert
+                    nombre_firmante_str = cert.subject.human_friendly
+                    cedula_match = re.search(r'serialNumber=CPF-([\d-]+)', nombre_firmante_str)
+                    nombre_match = re.search(r'commonName=([^,]+)', nombre_firmante_str)
+                    
+                    if nombre_match: nombre = nombre_match.group(1)
+                    if cedula_match: cedula = cedula_match.group(1)
+                
+                fecha_firma = status.signing_time.strftime('%Y-%m-%d %H:%M:%S') if status.signing_time else "No disponible"
+                if status.valid: razon_invalidez = "OK"
+
+                firma_info = {
+                    "firma_valida": status.valid,
+                    "datos": {
+                        "razon_invalidez": razon_invalidez,
+                        "nombre": nombre,
+                        "cedula": cedula,
+                        "fecha_firma": fecha_firma
+                    }
+                }
+                firmas_encontradas.append(firma_info)
+        
+        print(f"Validación de librería completada. Firmas encontradas: {len(firmas_encontradas)}")
+        sys.stdout.flush()
+        return {"firmas": firmas_encontradas, "ok": len(firmas_encontradas) > 0}
+
+    except Exception as e:
+        print(f"ERROR GRAVE DENTRO DE LA LIBRERÍA: {e}")
+        traceback.print_exc()
+        sys.stderr.flush()
+        return {"firmas": [], "ok": False, "error": str(e)}
 
 @app.route("/")
 def home():
-    # Una página de bienvenida para confirmar que el servicio está vivo
-    return "Servicio Validador de Firmas está en línea."
+    return "Servicio Validador de Firmas está en línea (v2 - Librería Interna)."
 
 @app.route("/validate", methods=["POST"])
 def validate_pdf():
-    print("1. /validate - Petición recibida.")
-    sys.stdout.flush() # Forzar que el log se escriba inmediatamente
-
+    print("Petición de validación recibida.")
+    sys.stdout.flush()
     if "file" not in request.files:
-        print("2. /validate - ERROR: No se encontró 'file'.")
-        sys.stderr.flush()
         return jsonify({"error": "No se envió archivo PDF"}), 400
 
     file = request.files["file"]
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         file.save(tmp.name)
         tmp_path = tmp.name
-    print(f"3. /validate - Archivo guardado en: {tmp_path}")
-    sys.stdout.flush()
 
-    try:
-        cmd = [
-            "python", "-m", "pyhanko.cli.main", "sign", "validate",
-            "--no-diff-analysis", "--force-revinfo", "--trust", TRUST_PATH,
-            "--no-strict-syntax", "--pretty-print", tmp_path
-        ]
-        print(f"4. /validate - Ejecutando comando: {' '.join(cmd)}")
-        sys.stdout.flush()
+    # Llamamos a nuestra nueva función interna
+    resultado = procesar_con_libreria(tmp_path)
+    
+    # Limpiamos el archivo temporal
+    if os.path.exists(tmp_path):
+        os.unlink(tmp_path)
         
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-        print("5. /validate - Comando finalizado.")
-        sys.stdout.flush()
-        
-        full_output = result.stdout + "\n" + result.stderr
-        print(f"6. /validate - --- SALIDA CRUDA DE PYHANKO ---\n{full_output}\n--- FIN SALIDA CRUDA ---")
-        sys.stdout.flush()
-
-        parsed = parse_pyhanko_output(full_output)
-        print(f"7. /validate - Parseo completado. Firmas: {len(parsed['firmas'])}")
-        sys.stdout.flush()
-        return jsonify(parsed)
-    except Exception as e:
-        print(f"8. /validate - ERROR 500 INESPERADO: {e}")
-        sys.stderr.flush()
-        # Imprime el traceback completo al log de errores
-        import traceback
-        traceback.print_exc()
-        return jsonify({"error": "Error interno del servidor"}), 500
-    finally:
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
-
-# La ruta /logs ya no es necesaria, la eliminamos.
+    return jsonify(resultado)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000, debug=True)

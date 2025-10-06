@@ -1,30 +1,19 @@
-# Usamos la base de Oracle Linux 9 slim
-FROM oraclelinux:9-slim
-
-# Instalamos Python y sus herramientas
-RUN microdnf install -y python3.11 python3.11-pip && \
-    microdnf clean all
+# Usamos una imagen de Python completa y robusta (Debian Bullseye)
+# Esto incluye todas las librerías de sistema que pyhanko podría necesitar
+FROM python:3.11-bullseye
 
 # Establecemos el directorio de trabajo
 WORKDIR /app
 
-# Creamos el entorno virtual
-RUN python3.11 -m venv venv
-
-# --- LA SOLUCIÓN CLAVE ---
-# Añadimos el directorio de binarios del venv al PATH del sistema.
-# Ahora, todos los programas (python, pip, gunicorn, pyhanko) son accesibles globalmente.
-ENV PATH="/app/venv/bin:$PATH"
-
 # Copiamos la lista de "ingredientes"
 COPY requirements.txt .
 
-# Ahora podemos usar 'pip' directamente, porque está en el PATH
+# Instalamos las dependencias de Python. Esto funcionará sin problemas.
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copiamos el resto de la aplicación
+# Copiamos el resto de nuestros archivos
 COPY app.py .
 COPY cr-root-bundle.pem .
 
-# Ahora podemos usar 'gunicorn' directamente
+# El comando para iniciar el servicio web
 CMD ["gunicorn", "--workers", "4", "--bind", "0.0.0.0:10000", "app:app"]

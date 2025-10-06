@@ -8,29 +8,24 @@ from logging.handlers import RotatingFileHandler
 
 app = Flask(__name__)
 
-# --- INICIO: NUEVA SECCIÓN DE LOGGING ---
-# Configura el logging para que escriba en un archivo
+# --- INICIO: SECCIÓN DE LOGGING (SIN CAMBIOS) ---
 log_file = 'validador.log'
-# Crea un manejador que rota los logs para que no crezcan indefinidamente
 handler = RotatingFileHandler(log_file, maxBytes=100000, backupCount=3)
-# Formato del log: [Timestamp] [Nivel de Error] Mensaje
 formatter = logging.Formatter(
     '%(asctime)s %(levelname)s: %(message)s [in %(pathname)s:%(lineno)d]'
 )
 handler.setFormatter(formatter)
-handler.setLevel(logging.INFO) # Captura desde errores informativos hasta críticos
+handler.setLevel(logging.INFO)
 app.logger.addHandler(handler)
-# --- FIN: NUEVA SECCIÓN DE LOGGING ---
+# --- FIN: SECCIÓN DE LOGGING ---
 
-# Las rutas a los archivos DENTRO del contenedor de Render
+# La ruta de los certificados se queda igual
 TRUST_PATH = "/app/cr-root-bundle.pem"
-PYHANKO_BIN = "/usr/local/bin/pyhanko"
 
-# Tu función parse_pyhanko_output se queda igual
+# La función de parseo se queda igual
 def parse_pyhanko_output(output):
     firmas = []
     current_firma = None
-    # ... (lógica de parseo sin cambios)
     for line in output.splitlines():
         line = line.strip()
         field_match = re.match(r"Field \d+: (.+)", line)
@@ -71,19 +66,22 @@ def validate_pdf():
         tmp_path = tmp.name
 
     try:
+        # --- ESTA ES LA LÍNEA CORREGIDA Y DEFINITIVA ---
+        # Ejecutamos pyhanko como un módulo de python, que es la forma más robusta.
         cmd = [
-            PYHANKO_BIN, "sign", "validate",
+            "python", "-m", "pyhanko.cli.main", "sign", "validate",
             "--no-diff-analysis", "--soft-revocation-check",
             "--trust", TRUST_PATH, "--no-strict-syntax", "--pretty-print",
             tmp_path
         ]
+        # --- FIN DE LA CORRECCIÓN ---
+
         result = subprocess.run(cmd, capture_output=True, text=True, check=False)
         full_output = result.stdout + "\n" + result.stderr
         parsed = parse_pyhanko_output(full_output)
         app.logger.info(f"Validación exitosa para el archivo temporal: {tmp_path}")
         return jsonify(parsed)
     except Exception as e:
-        # --- ¡IMPORTANTE! Aquí registramos el error en nuestro archivo de log ---
         app.logger.error(f"Error 500 al procesar el archivo: {e}", exc_info=True)
         return jsonify({"error": "Error interno del servidor"}), 500
     finally:
@@ -91,23 +89,21 @@ def validate_pdf():
             os.unlink(tmp_path)
 
 
-# --- INICIO: NUEVA RUTA PARA VER LOS LOGS ---
+# La ruta para ver los logs se queda igual
 @app.route("/logs")
 def view_logs():
-    """
-    Esta página muestra el contenido del archivo de logs.
-    """
     if not os.path.exists(log_file):
         return "No se ha generado ningún log todavía."
     
-    with open(log_file, 'r') as f:
-        content = f.read().replace('\n', '<br>')
-    return f"<pre style='font-family: monospace; word-wrap: break-word;'>{content}</pre>"
-# --- FIN: NUEVA RUTA PARA VER LOS LOGS ---
-
+    # Leemos las últimas 100 líneas para no sobrecargar
+    try:
+        with open(log_file, 'r') as f:
+            lines = f.readlines()
+            last_100_lines = lines[-100:]
+            content = "".join(last_100_lines).replace('\n', '<br>')
+        return f"<pre style='font-family: monospace; word-wrap: break-word;'>{content}</pre>"
+    except Exception as e:
+        return f"No se pudieron leer los logs: {e}"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000, debug=True)
-
-    
-

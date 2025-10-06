@@ -1,21 +1,18 @@
-# Usar una imagen oficial de Python como base
-FROM python:3.11-slim
+# Usamos una imagen de Linux mínima, ya que nuestro ejecutable tiene todo lo que necesita
+FROM debian:bookworm-slim
 
-# Establecer el directorio de trabajo dentro del contenedor
 WORKDIR /app
 
-# Instalar dependencias a nivel de sistema operativo que pyhanko podría necesitar
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libxml2-dev \
-    libxslt-dev \
-    && rm -rf /var/lib/apt/lists/*
-    
-# Instalar las librerías de Python
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Solo necesitamos instalar Python para poder correr el servidor web Flask/Gunicorn
+RUN apt-get update && apt-get install -y --no-install-recommends python3-pip gunicorn && rm -rf /var/lib/apt/lists/*
+RUN pip install Flask
 
-# Copiar el resto de los archivos del proyecto
-COPY . .
+# Copiamos nuestro "motor" (el ejecutable) y el código del servidor "adaptador"
+COPY validador_cli .
+COPY app.py .
 
-# Comando para iniciar el servidor web Gunicorn. Render gestionará el puerto.
+# Exponemos el puerto que usará Gunicorn
+EXPOSE 10000
+
+# El comando para iniciar el servicio
 CMD ["gunicorn", "--workers", "4", "--bind", "0.0.0.0:10000", "app:app"]

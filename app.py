@@ -1,108 +1,52 @@
 from flask import Flask, request, jsonify
 import tempfile
+import subprocess
 import os
-import re
-import sys
-import traceback
-
-# --- Importamos las funciones y clases necesarias de pyHanko ---
-from pyhanko.pdf_utils.reader import PdfFileReader
-from pyhanko.sign.validation import validate_pdf_ltv_signature
-from pyhanko_certvalidator import ValidationContext, pem # <-- ¡IMPORTANTE! Importamos pem
-from pyhanko_certvalidator.path import ValidationPath 
+import json
 
 app = Flask(__name__)
 
-TRUST_PATH = "/app/cr-root-bundle.pem"
+# La ruta a nuestro ejecutable dentro del entorno de Render
+EXECUTABLE_PATH = "/app/validador_cli"
 
-def procesar_con_libreria(ruta_pdf):
-    print(f"Iniciando validación de librería para: {ruta_pdf}")
-    sys.stdout.flush()
-    try:
-        # --- ESTA ES LA SECCIÓN CORREGIDA Y DEFINITIVA ---
-        with open(TRUST_PATH, 'rb') as f:
-            trust_roots_pem = f.read()
-        
-        # Usamos la función correcta para cargar los certificados desde el archivo PEM
-        validation_context = ValidationContext(
-            trust_roots=list(pem.load_certs(trust_roots_pem)),
-            allow_fetching=True,
-            revocation_mode='soft-fail'
-        )
-        # --- FIN DE LA CORRECCIÓN ---
-
-        firmas_encontradas = []
-        with open(ruta_pdf, 'rb') as doc_file:
-            r = PdfFileReader(doc_file)
-            
-            if not r.embedded_signatures:
-                 return {"firmas": [], "ok": False}
-
-            for i, sig in enumerate(r.embedded_signatures):
-                status = validate_pdf_ltv_signature(sig, validation_context)
-
-                nombre = "No disponible"
-                cedula = "No disponible"
-                razon_invalidez = status.summary
-
-                if status.path and isinstance(status.path, ValidationPath):
-                    cert = status.path.leaf_cert
-                    nombre_firmante_str = cert.subject.human_friendly
-                    
-                    # Ajustado para los nombres de campo correctos (ej. commonName)
-                    cedula_match = re.search(r'serialNumber=CPF-([\d-]+)', nombre_firmante_str)
-                    nombre_match = re.search(r'commonName=([^,]+)', nombre_firmante_str)
-                    
-                    if nombre_match: nombre = nombre_match.group(1)
-                    if cedula_match: cedula = cedula_match.group(1)
-                
-                fecha_firma = status.signing_time.strftime('%Y-%m-%d %H:%M:%S') if status.signing_time else "No disponible"
-                if status.valid: razon_invalidez = "OK"
-
-                firma_info = {
-                    "firma_valida": status.valid,
-                    "datos": {
-                        "razon_invalidez": razon_invalidez,
-                        "nombre": nombre,
-                        "cedula": cedula,
-                        "fecha_firma": fecha_firma
-                    }
-                }
-                firmas_encontradas.append(firma_info)
-        
-        return {"firmas": firmas_encontradas, "ok": len(firmas_encontradas) > 0}
-
-    except Exception as e:
-        print(f"ERROR GRAVE DENTRO DE LA LIBRERÍA: {e}")
-        traceback.print_exc()
-        sys.stderr.flush()
-        return {"firmas": [], "ok": False, "error": str(e)}
+# Le damos permisos de ejecución a nuestro programa al iniciar
+# Esto es importante porque los permisos a veces se pierden al subir archivos
+if os.path.exists(EXECUTABLE_PATH):
+    os.chmod(EXECUTABLE_PATH, 0o755)
 
 @app.route("/")
 def home():
-    return "Servicio Validador de Firmas está en línea (v3 - Final)."
+    return "Servicio Validador de Firmas (Portable) está en línea."
 
 @app.route("/validate", methods=["POST"])
 def validate_pdf():
-    print("Petición de validación recibida.")
-    sys.stdout.flush()
     if "file" not in request.files:
         return jsonify({"error": "No se envió archivo PDF"}), 400
 
     file = request.files["file"]
+    # Guardamos el archivo recibido en una ubicación temporal
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
         file.save(tmp.name)
         tmp_path = tmp.name
 
-    resultado = procesar_con_libreria(tmp_path)
-    
-    if os.path.exists(tmp_path):
-        os.unlink(tmp_path)
+    try:
+        # Llamamos a nuestro ejecutable autocontenido, pasándole la ruta del archivo temporal
+        cmd = [EXECUTABLE_PATH, tmp_path]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
         
-    return jsonify(resultado)
+        # El resultado que imprimió el ejecutable está en result.stdout
+        # Lo convertimos de texto JSON a un objeto y lo devolvemos
+        response_json = json.loads(result.stdout)
+        return jsonify(response_json)
+    except Exception as e:
+        # Si algo falla (ej. el JSON está malformado), devolvemos un error
+        error_detail = result.stderr if 'result' in locals() else str(e)
+        return jsonify({"error": "Error interno al procesar la respuesta del validador.", "detalle": error_detail}), 500
+    finally:
+        # Nos aseguramos de borrar el archivo temporal
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000, debug=True)
-
-    
-
+    # Este bloque es solo para pruebas locales, Render no lo usará
+    app.run(host="0.0.0.0", port=10000)

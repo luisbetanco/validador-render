@@ -2,8 +2,9 @@
 FROM oraclelinux:9-slim
 
 # --- ETAPA 2: Instalar las mismas herramientas que tienes tú ---
-RUN dnf install -y python3.11 python3.11-pip && \
-    dnf clean all
+# Usamos 'microdnf' que es el instalador en la versión 'slim'
+RUN microdnf install -y python3.11 python3.11-pip && \
+    microdnf clean all
 
 # Establecer el directorio de trabajo
 WORKDIR /app
@@ -24,4 +25,3 @@ COPY cr-root-bundle.pem .
 # --- ETAPA 4: El comando final para ejecutar el servicio ---
 # Usamos el gunicorn de nuestro entorno virtual, garantizando la compatibilidad
 CMD ["./venv/bin/gunicorn", "--workers", "4", "--bind", "0.0.0.0:10000", "app:app"]
-

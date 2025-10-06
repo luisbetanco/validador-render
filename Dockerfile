@@ -1,27 +1,30 @@
-# --- ETAPA 1: Usar una base IDÉNTICA a tu servidor ---
+# Usamos la base de Oracle Linux 9 slim
 FROM oraclelinux:9-slim
 
-# --- ETAPA 2: Instalar las mismas herramientas que tienes tú ---
-# Usamos 'microdnf' que es el instalador en la versión 'slim'
+# Instalamos Python y sus herramientas
 RUN microdnf install -y python3.11 python3.11-pip && \
     microdnf clean all
 
-# Establecer el directorio de trabajo
+# Establecemos el directorio de trabajo
 WORKDIR /app
 
-# --- ETAPA 3: Crear el mismo entorno virtual ---
+# Creamos el entorno virtual
 RUN python3.11 -m venv venv
+
+# --- LA SOLUCIÓN CLAVE ---
+# Añadimos el directorio de binarios del venv al PATH del sistema.
+# Ahora, todos los programas (python, pip, gunicorn, pyhanko) son accesibles globalmente.
+ENV PATH="/app/venv/bin:$PATH"
 
 # Copiamos la lista de "ingredientes"
 COPY requirements.txt .
 
-# Instalamos las librerías DENTRO del entorno virtual, como en tu servidor
-RUN ./venv/bin/pip install --no-cache-dir -r requirements.txt
+# Ahora podemos usar 'pip' directamente, porque está en el PATH
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copiamos el resto de la aplicación
 COPY app.py .
 COPY cr-root-bundle.pem .
 
-# --- ETAPA 4: El comando final para ejecutar el servicio ---
-# Usamos el gunicorn de nuestro entorno virtual, garantizando la compatibilidad
-CMD ["./venv/bin/gunicorn", "--workers", "4", "--bind", "0.0.0.0:10000", "app:app"]
+# Ahora podemos usar 'gunicorn' directamente
+CMD ["gunicorn", "--workers", "4", "--bind", "0.0.0.0:10000", "app:app"]

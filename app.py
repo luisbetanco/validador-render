@@ -7,12 +7,13 @@ import re
 app = Flask(__name__)
 
 # Rutas DENTRO de nuestro contenedor Docker de Oracle Linux
-# Serán idénticas a las de tu servidor
 TRUST_PATH = "/app/cr-root-bundle.pem"
-PYHANKO_BIN = "/app/venv/bin/pyhanko" 
+# --- ESTA ES LA CLAVE DE LA SOLUCIÓN ---
+# Apuntamos al intérprete de Python de nuestro venv, que SÍ es una ruta predecible
+PYTHON_EXEC = "/app/venv/bin/python" 
 
 def parse_pyhanko_output(output):
-    # Tu función de parseo que ya funciona
+    # Tu función de parseo que ya funciona, sin cambios
     firmas = []
     current_firma = None
     for line in output.splitlines():
@@ -50,11 +51,15 @@ def validate_pdf():
         file.save(tmp.name)
         tmp_path = tmp.name
     try:
+        # --- ESTE ES EL COMANDO CORREGIDO Y ROBUSTO ---
+        # Le decimos a nuestro Python que ejecute el módulo de pyhanko
         cmd = [
-            PYHANKO_BIN, "sign", "validate",
+            PYTHON_EXEC, "-m", "pyhanko.cli.main", "sign", "validate",
             "--no-diff-analysis", "--force-revinfo", "--trust", TRUST_PATH,
             "--no-strict-syntax", "--pretty-print", tmp_path
         ]
+        # --- FIN DE LA CORRECCIÓN ---
+        
         result = subprocess.run(cmd, capture_output=True, text=True, check=False)
         full_output = result.stdout + "\n" + result.stderr
         parsed = parse_pyhanko_output(full_output)

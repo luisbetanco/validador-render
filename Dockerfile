@@ -1,11 +1,14 @@
-# Usamos una imagen de Linux mínima, ya que nuestro ejecutable tiene todo lo que necesita
-FROM debian:bookworm-slim
+# Usamos una imagen oficial de Python, que está preparada para instalar paquetes con pip
+FROM python:3.11-slim
 
+# Establecemos el directorio de trabajo
 WORKDIR /app
 
-# Solo necesitamos instalar Python para poder correr el servidor web Flask/Gunicorn
-RUN apt-get update && apt-get install -y --no-install-recommends python3-pip gunicorn && rm -rf /var/lib/apt/lists/*
-RUN pip install Flask
+# Copiamos primero el archivo de requerimientos
+COPY requirements.txt .
+
+# Instalamos las dependencias con pip. Esto funcionará sin problemas en esta imagen.
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copiamos nuestro "motor" (el ejecutable) y el código del servidor "adaptador"
 COPY validador_cli .

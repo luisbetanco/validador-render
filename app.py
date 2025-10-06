@@ -45,7 +45,7 @@ def parse_pyhanko_output(output):
 
 @app.route("/")
 def home():
-    return "Servicio Validador de Firmas está en línea."
+    return "Servicio Validador de Firmas está en línea (v_final)."
 
 @app.route("/validate", methods=["POST"])
 def validate_pdf():
@@ -68,7 +68,7 @@ def validate_pdf():
         result = subprocess.run(cmd, capture_output=True, text=True, check=False)
         full_output = result.stdout + "\n" + result.stderr
 
-        # Imprimimos la salida a los logs de Render para poder depurar si algo falla
+        # Imprimimos la salida a los logs de Render para poder depurar
         print(f"--- Salida Cruda de PyHanko ---\n{full_output}\n--- Fin Salida Cruda ---", file=sys.stdout)
         sys.stdout.flush()
 
@@ -82,7 +82,3 @@ def validate_pdf():
     finally:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
-
